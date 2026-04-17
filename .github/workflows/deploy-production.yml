@@ -1,0 +1,40 @@
+name: Deploy Theme to Production
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: webfactory/ssh-agent@v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.PROD_SSH_KEY }}
+      - run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          PROD_PATH: ${{ secrets.PROD_PATH }}
+        run: |
+          DEST="${PROD_PATH%/}/"
+          rsync -avz --delete \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude '.deploy.env' \
+            --exclude '.gitignore' \
+            --exclude 'bootstrap.sh' \
+            --exclude 'README*' \
+            -e "ssh -p ${PROD_PORT} -o StrictHostKeyChecking=yes" \
+            ./ "${PROD_USER}@${PROD_HOST}:${DEST}"
