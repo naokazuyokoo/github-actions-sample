@@ -47,6 +47,7 @@ confirm_block() {
   local commands="$2"
   local editable_command=""
   local command_line=""
+  local bash_major_version=0
   echo "---"
   echo "Description:"
   printf '%s\n' "$description"
@@ -57,7 +58,17 @@ confirm_block() {
   if confirm_yes_no "Do you want to proceed?"; then
     # Show a one-line editable command buffer before the scripted step runs.
     command_line="${commands//$'\n'/; }"
-    read -e -r -p "Press Enter to run (editable): " -i "$command_line" editable_command
+    if [ -n "${BASH_VERSINFO:-}" ]; then
+      bash_major_version="${BASH_VERSINFO[0]}"
+    fi
+
+    if [ "$bash_major_version" -ge 4 ]; then
+      read -e -r -p "Press Enter to run (editable): " -i "$command_line" editable_command
+    else
+      echo "Your Bash (${BASH_VERSION}) does not support read -i (prefilled input)."
+      printf 'Command: %s\n' "$command_line"
+      read -e -r -p "Press Enter to run: " editable_command
+    fi
     return 0
   fi
   echo "Skipped."
