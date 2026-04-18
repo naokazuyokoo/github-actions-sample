@@ -5,8 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 ENV_FILE=".deploy.env"
-KNOWN_HOSTS_FILE="/tmp/prod_known_hosts"
+KNOWN_HOSTS_FILE="$(mktemp "/tmp/prod_known_hosts.XXXXXX")"
 STEP_NUMBER=0
+
+cleanup() {
+  rm -f "${KNOWN_HOSTS_FILE}"
+}
+trap cleanup EXIT
 
 print_separator() {
   echo "----------------------------------------------------------------"
@@ -92,6 +97,7 @@ check_required_vars() {
     PROD_USER
     PROD_PORT
     PROD_PATH_TO_THEME
+    EXPECTED_PROD_HOST_FINGERPRINT
   )
 
   for key in "${required_vars[@]}"; do
@@ -107,7 +113,33 @@ check_required_vars() {
   fi
 }
 
+check_required_commands() {
+  local missing=0
+  local required_commands=(
+    git
+    gh
+    rg
+    ssh-keygen
+    ssh-copy-id
+    ssh-keyscan
+    mktemp
+  )
+
+  for cmd in "${required_commands[@]}"; do
+    if ! command -v "${cmd}" >/dev/null 2>&1; then
+      echo "Required command not found: ${cmd}"
+      missing=1
+    fi
+  done
+
+  if [ "${missing}" -ne 0 ]; then
+    echo "Install missing commands and rerun."
+    exit 1
+  fi
+}
+
 echo "Bootstrap start: ${SCRIPT_DIR}"
+check_required_commands
 
 if [ -f "$ENV_FILE" ]; then
   echo "${ENV_FILE} already exists. Input step is skipped."
@@ -142,6 +174,7 @@ else
   prompt_required PROD_USER "Production SSH user"
   prompt_default PROD_PORT "Production SSH port" "22"
   prompt_required PROD_PATH_TO_THEME "Production theme path"
+  prompt_required EXPECTED_PROD_HOST_FINGERPRINT "Expected production host key fingerprint (example: SHA256:...)"
 
   echo ""
   echo "Please confirm the values:"
@@ -154,6 +187,7 @@ else
   echo "PROD_USER=${PROD_USER}"
   echo "PROD_PORT=${PROD_PORT}"
   echo "PROD_PATH_TO_THEME=${PROD_PATH_TO_THEME}"
+  echo "EXPECTED_PROD_HOST_FINGERPRINT=${EXPECTED_PROD_HOST_FINGERPRINT}"
 
   if ! confirm_yes_no "Save these values to ${ENV_FILE}?"; then
     echo "Canceled."
@@ -170,6 +204,7 @@ PROD_HOST=${PROD_HOST}
 PROD_USER=${PROD_USER}
 PROD_PORT=${PROD_PORT}
 PROD_PATH_TO_THEME=${PROD_PATH_TO_THEME}
+EXPECTED_PROD_HOST_FINGERPRINT=${EXPECTED_PROD_HOST_FINGERPRINT}
 ENV
 
   chmod 600 "$ENV_FILE"
@@ -276,11 +311,22 @@ if confirm_block \
 fi
 
 if confirm_block \
-  "Collect the production host key and display its fingerprint for verification." \
+  "Collect the production host key and verify its fingerprint matches the expected value." \
   "ssh-keyscan -p \"${PROD_PORT}\" -H \"${PROD_HOST}\" > ${KNOWN_HOSTS_FILE}
 ssh-keygen -lf ${KNOWN_HOSTS_FILE}"; then
+  ACTUAL_FINGERPRINTS=""
   ssh-keyscan -p "${PROD_PORT}" -H "${PROD_HOST}" > "${KNOWN_HOSTS_FILE}"
   ssh-keygen -lf "${KNOWN_HOSTS_FILE}"
+  ACTUAL_FINGERPRINTS="$(ssh-keygen -lf "${KNOWN_HOSTS_FILE}" | awk '{print $2}')"
+  if ! printf '%s\n' "${ACTUAL_FINGERPRINTS}" | rg -x "${EXPECTED_PROD_HOST_FINGERPRINT}" >/dev/null 2>&1; then
+    echo "Fingerprint verification failed."
+    echo "Expected: ${EXPECTED_PROD_HOST_FINGERPRINT}"
+    echo "Actual:"
+    printf '%s\n' "${ACTUAL_FINGERPRINTS}"
+    echo "Stop and verify host key out-of-band before rerunning."
+    exit 1
+  fi
+  echo "Fingerprint verified: ${EXPECTED_PROD_HOST_FINGERPRINT}"
   print_step_result "Completed."
 fi
 
@@ -303,7 +349,9 @@ fi
 
 CURRENT_BRANCH="$(git branch --show-current)"
 if [ -z "${CURRENT_BRANCH}" ]; then
-  CURRENT_BRANCH="master"
+  echo "Could not detect current branch (detached HEAD)."
+  echo "Checkout a branch and rerun."
+  exit 1
 fi
 
 PUSH_REMOTE="origin"
