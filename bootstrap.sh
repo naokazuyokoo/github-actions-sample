@@ -6,6 +6,18 @@ cd "$SCRIPT_DIR"
 
 ENV_FILE=".deploy.env"
 KNOWN_HOSTS_FILE="/tmp/prod_known_hosts"
+STEP_NUMBER=0
+
+print_separator() {
+  echo "----------------------------------------------------------------"
+}
+
+print_step_result() {
+  local message="$1"
+  echo "[Result] ${message}"
+  print_separator
+  echo ""
+}
 
 prompt_required() {
   local var_name="$1"
@@ -45,17 +57,26 @@ confirm_yes_no() {
 confirm_block() {
   local description="$1"
   local commands="$2"
-  echo "---"
-  echo "Description:"
+  STEP_NUMBER=$((STEP_NUMBER + 1))
+  echo ""
+  print_separator
+  printf '[Step %02d]\n' "$STEP_NUMBER"
+  print_separator
+  echo "[Description]"
   printf '%s\n' "$description"
   echo ""
-  echo "Commands:"
+  echo "[Commands]"
   printf '%s\n' "$commands"
-  echo "---"
-  if confirm_yes_no "Do you want to proceed?"; then
+  print_separator
+  if confirm_yes_no "Proceed with this step?"; then
+    echo "[Action] Run"
+    print_separator
     return 0
   fi
+  echo "[Action] Skip"
+  print_separator
   echo "Skipped."
+  echo ""
   return 1
 }
 
@@ -175,6 +196,7 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     "Initialize a Git repository in this directory." \
     "git init"; then
     git init
+    print_step_result "Completed."
   else
     echo "Git repository is required. Exiting."
     exit 1
@@ -188,6 +210,7 @@ if confirm_block \
     echo "GitHub CLI is not authenticated. Run: gh auth login"
     exit 1
   fi
+  print_step_result "Completed."
 fi
 
 if confirm_block \
@@ -199,6 +222,7 @@ if confirm_block \
   else
     git commit -m "Initial commit for GitHub Actions sample"
   fi
+  print_step_result "Completed."
 fi
 
 if confirm_block \
@@ -211,6 +235,7 @@ if confirm_block \
   else
     echo "Remote 'origin' does not exist. Rename skipped."
   fi
+  print_step_result "Completed."
 fi
 
 if confirm_block \
@@ -221,6 +246,7 @@ if confirm_block \
   else
     gh repo create "${GITHUB_OWNER}/${GITHUB_REPO}" --private --source . --remote origin
   fi
+  print_step_result "Completed."
 fi
 
 TARGET_REPO="${GITHUB_OWNER}/${GITHUB_REPO}"
@@ -228,6 +254,7 @@ if confirm_block \
   "Set GitHub CLI default repository to the repository created/used by this script." \
   "gh repo set-default \"${TARGET_REPO}\""; then
   gh repo set-default "${TARGET_REPO}"
+  print_step_result "Completed."
 fi
 
 if [ -f "$HOME/.ssh/${SSH_KEY_NAME}" ]; then
@@ -237,6 +264,7 @@ else
     "Generate a new SSH key pair used by GitHub Actions deployment." \
     "ssh-keygen -t ed25519 -C \"github-actions@${PROD_DOMAIN}\" -f \"$HOME/.ssh/${SSH_KEY_NAME}\" -N \"\""; then
     ssh-keygen -t ed25519 -C "github-actions@${PROD_DOMAIN}" -f "$HOME/.ssh/${SSH_KEY_NAME}" -N ""
+    print_step_result "Completed."
   fi
 fi
 
@@ -244,6 +272,7 @@ if confirm_block \
   "Register the public SSH key on the target server using ssh-copy-id." \
   "ssh-copy-id -f -i \"$HOME/.ssh/${SSH_KEY_NAME}.pub\" \"${SSH_ALIAS_OR_USER_AT_HOST}\""; then
   ssh-copy-id -f -i "$HOME/.ssh/${SSH_KEY_NAME}.pub" "${SSH_ALIAS_OR_USER_AT_HOST}"
+  print_step_result "Completed."
 fi
 
 if confirm_block \
@@ -252,6 +281,7 @@ if confirm_block \
 ssh-keygen -lf ${KNOWN_HOSTS_FILE}"; then
   ssh-keyscan -p "${PROD_PORT}" -H "${PROD_HOST}" > "${KNOWN_HOSTS_FILE}"
   ssh-keygen -lf "${KNOWN_HOSTS_FILE}"
+  print_step_result "Completed."
 fi
 
 if confirm_block \
@@ -268,6 +298,7 @@ gh secret set -R \"${TARGET_REPO}\" PROD_KNOWN_HOSTS < \"${KNOWN_HOSTS_FILE}\"";
   gh secret set -R "${TARGET_REPO}" PROD_PATH --body "${PROD_PATH_TO_THEME}"
   gh secret set -R "${TARGET_REPO}" PROD_SSH_KEY < "${HOME}/.ssh/${SSH_KEY_NAME}"
   gh secret set -R "${TARGET_REPO}" PROD_KNOWN_HOSTS < "${KNOWN_HOSTS_FILE}"
+  print_step_result "Completed."
 fi
 
 CURRENT_BRANCH="$(git branch --show-current)"
@@ -286,6 +317,7 @@ if confirm_block \
   "Push the current branch to GitHub and set upstream tracking." \
   "git push -u ${PUSH_REMOTE} ${CURRENT_BRANCH}"; then
   git push -u "${PUSH_REMOTE}" "${CURRENT_BRANCH}"
+  print_step_result "Completed."
 fi
 
 LATEST_PUSH_RUN_ID=""
@@ -317,6 +349,7 @@ if confirm_block \
       gh workflow run -R "${TARGET_REPO}" "Deploy Theme to Production" --ref "${CURRENT_BRANCH}"
     fi
   fi
+  print_step_result "Completed."
 fi
 
 echo "Bootstrap completed."
