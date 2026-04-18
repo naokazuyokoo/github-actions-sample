@@ -138,7 +138,73 @@ check_required_commands() {
   fi
 }
 
+load_brew_shellenv_if_available() {
+  if command -v brew >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [ -x /opt/homebrew/bin/brew ]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+    return 0
+  fi
+
+  if [ -x /usr/local/bin/brew ]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+    return 0
+  fi
+
+  return 1
+}
+
+ensure_brew_and_gh() {
+  load_brew_shellenv_if_available || true
+
+  if ! command -v brew >/dev/null 2>&1; then
+    if confirm_block \
+      "Install Homebrew because 'brew' command is not available." \
+      '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+echo '\''eval "$(/opt/homebrew/bin/brew shellenv)"'\'' >> ~/.zshrc
+eval "$(/opt/homebrew/bin/brew shellenv)"'; then
+      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+      if [ -x /opt/homebrew/bin/brew ]; then
+        if [ ! -f "$HOME/.zshrc" ] || ! grep -Fqx 'eval "$(/opt/homebrew/bin/brew shellenv)"' "$HOME/.zshrc"; then
+          echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zshrc"
+        fi
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+      elif [ -x /usr/local/bin/brew ]; then
+        if [ ! -f "$HOME/.zshrc" ] || ! grep -Fqx 'eval "$(/usr/local/bin/brew shellenv)"' "$HOME/.zshrc"; then
+          echo 'eval "$(/usr/local/bin/brew shellenv)"' >> "$HOME/.zshrc"
+        fi
+        eval "$(/usr/local/bin/brew shellenv)"
+      fi
+
+      if ! command -v brew >/dev/null 2>&1; then
+        echo "Homebrew installation appears to have failed. Please install manually and rerun."
+        exit 1
+      fi
+      print_step_result "Completed."
+    else
+      echo "Homebrew is required. Exiting."
+      exit 1
+    fi
+  fi
+
+  if ! command -v gh >/dev/null 2>&1; then
+    if confirm_block \
+      "Install GitHub CLI because 'gh' command is not available." \
+      "brew install gh"; then
+      brew install gh
+      print_step_result "Completed."
+    else
+      echo "GitHub CLI is required. Exiting."
+      exit 1
+    fi
+  fi
+}
+
 echo "Bootstrap start: ${SCRIPT_DIR}"
+ensure_brew_and_gh
 check_required_commands
 
 if [ -f "$ENV_FILE" ]; then
