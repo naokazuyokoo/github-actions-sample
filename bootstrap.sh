@@ -118,7 +118,6 @@ check_required_commands() {
   local required_commands=(
     git
     gh
-    rg
     ssh-keygen
     ssh-copy-id
     ssh-keyscan
@@ -276,7 +275,7 @@ ENV
   chmod 600 "$ENV_FILE"
 
   if [ -f .gitignore ]; then
-    if ! rg -n "^\\.deploy\\.env$" .gitignore >/dev/null 2>&1; then
+    if ! grep -Fqx ".deploy.env" .gitignore; then
       echo ".deploy.env" >> .gitignore
       echo "Added .deploy.env to .gitignore"
     fi
@@ -384,7 +383,7 @@ ssh-keygen -lf ${KNOWN_HOSTS_FILE}"; then
   ssh-keyscan -p "${PROD_PORT}" -H "${PROD_HOST}" > "${KNOWN_HOSTS_FILE}"
   ssh-keygen -lf "${KNOWN_HOSTS_FILE}"
   ACTUAL_FINGERPRINTS="$(ssh-keygen -lf "${KNOWN_HOSTS_FILE}" | awk '{print $2}')"
-  if ! printf '%s\n' "${ACTUAL_FINGERPRINTS}" | rg -x "${EXPECTED_PROD_HOST_FINGERPRINT}" >/dev/null 2>&1; then
+  if ! printf '%s\n' "${ACTUAL_FINGERPRINTS}" | grep -Fx -- "${EXPECTED_PROD_HOST_FINGERPRINT}" >/dev/null 2>&1; then
     echo "Fingerprint verification failed."
     echo "Expected: ${EXPECTED_PROD_HOST_FINGERPRINT}"
     echo "Actual:"

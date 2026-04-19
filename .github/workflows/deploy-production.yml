@@ -3,8 +3,18 @@ name: Deploy Theme to Production
 on:
   push:
     branches:
+      - main
       - master
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run rsync without changing files
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 concurrency:
   group: deploy-production
@@ -13,6 +23,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: webfactory/ssh-agent@v0.10.0
@@ -20,21 +31,107 @@ jobs:
           ssh-private-key: ${{ secrets.PROD_SSH_KEY }}
       - run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.PROD_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
+          printf '%s\n' "${{ secrets.PROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
       - env:
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_USER: ${{ secrets.PROD_USER }}
           PROD_PORT: ${{ secrets.PROD_PORT }}
           PROD_PATH: ${{ secrets.PROD_PATH }}
+          PROD_BACKUP_KEEP: ${{ secrets.PROD_BACKUP_KEEP }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
+          : "${PROD_HOST:?Missing PROD_HOST}"
+          : "${PROD_USER:?Missing PROD_USER}"
+          : "${PROD_PORT:?Missing PROD_PORT}"
+          : "${PROD_PATH:?Missing PROD_PATH}"
+
+          if [ ! -f style.css ]; then
+            echo "style.css not found. This repository root does not look like a WordPress theme."
+            exit 1
+          fi
+
+          PROD_PATH="${PROD_PATH%/}"
+          if [ "${PROD_PATH}" = "/" ]; then
+            echo "Refusing to deploy to root path."
+            exit 1
+          fi
+
+          if [[ "${PROD_PATH}" != /* ]]; then
+            echo "PROD_PATH must be an absolute path."
+            exit 1
+          fi
+
+          THEME_NAME="$(basename "${PROD_PATH}")"
+          THEMES_DIR="$(dirname "${PROD_PATH}")"
+          WP_CONTENT_DIR="$(dirname "${THEMES_DIR}")"
+
+          if [ "$(basename "${THEMES_DIR}")" != "themes" ] || [ "$(basename "${WP_CONTENT_DIR}")" != "wp-content" ]; then
+            echo "PROD_PATH must point to a specific theme directory under wp-content/themes."
+            echo "Example: /home/user/public_html/wp-content/themes/my-theme"
+            exit 1
+          fi
+
+          if [ -z "${THEME_NAME}" ] || [ "${THEME_NAME}" = "." ] || [ "${THEME_NAME}" = ".." ]; then
+            echo "Could not detect theme name from PROD_PATH."
+            exit 1
+          fi
+
+          BACKUP_KEEP="${PROD_BACKUP_KEEP:-5}"
+          if ! [[ "${BACKUP_KEEP}" =~ ^[0-9]+$ ]] || [ "${BACKUP_KEEP}" -lt 1 ]; then
+            echo "PROD_BACKUP_KEEP must be an integer >= 1."
+            exit 1
+          fi
+
+          BACKUP_PARENT="${WP_CONTENT_DIR}/.deploy-backups/${THEME_NAME}"
+          BACKUP_STAMP="$(date -u +%Y%m%d%H%M%S)"
+          BACKUP_DIR="${BACKUP_PARENT}/${BACKUP_STAMP}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          SSH_CMD="ssh -p ${PROD_PORT} -o StrictHostKeyChecking=yes"
+          BACKUP_DIR_ESCAPED="$(printf '%q' "${BACKUP_DIR}")"
+          BACKUP_PARENT_ESCAPED="$(printf '%q' "${BACKUP_PARENT}")"
+          THEMES_DIR_ESCAPED="$(printf '%q' "${THEMES_DIR}")"
+
+          ${SSH_CMD} "${PROD_USER}@${PROD_HOST}" "test -d ${THEMES_DIR_ESCAPED}"
+          ${SSH_CMD} "${PROD_USER}@${PROD_HOST}" "mkdir -p ${BACKUP_DIR_ESCAPED}"
+
           DEST="${PROD_PATH%/}/"
-          rsync -avz --delete \
-            --exclude '.git/' \
-            --exclude '.github/' \
-            --exclude '.deploy.env' \
-            --exclude '.gitignore' \
-            --exclude 'bootstrap.sh' \
-            --exclude 'README*' \
-            -e "ssh -p ${PROD_PORT} -o StrictHostKeyChecking=yes" \
-            ./ "${PROD_USER}@${PROD_HOST}:${DEST}"
+          RSYNC_ARGS=(
+            -avz
+            --delete
+            --backup
+            --backup-dir="${BACKUP_DIR}"
+            --exclude '.git/'
+            --exclude '.github/'
+            --exclude '.deploy.env'
+            --exclude '.gitignore'
+            --exclude 'bootstrap.sh'
+            --exclude 'README*'
+            -e "${SSH_CMD}"
+          )
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            RSYNC_ARGS+=(--dry-run)
+            echo "Dry run enabled. No files will be changed."
+          fi
+
+          rsync "${RSYNC_ARGS[@]}" ./ "${PROD_USER}@${PROD_HOST}:${DEST}"
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "Dry run completed. Backup directory was prepared but no files were changed."
+            exit 0
+          fi
+
+          ${SSH_CMD} "${PROD_USER}@${PROD_HOST}" "sh -lc 'set -eu
+            parent=${BACKUP_PARENT_ESCAPED}
+            keep=${BACKUP_KEEP}
+            [ -d \"\$parent\" ] || exit 0
+            total=\$(find \"\$parent\" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d \"[:space:]\")
+            [ \"\$total\" -gt \"\$keep\" ] || exit 0
+            remove_count=\$((total - keep))
+            find \"\$parent\" -mindepth 1 -maxdepth 1 -type d | sort | head -n \"\$remove_count\" | while IFS= read -r dir; do
+              rm -rf \"\$dir\"
+              echo \"Pruned backup: \$dir\"
+            done
+          '"
+
+          echo "Backup saved: ${BACKUP_DIR}"
