@@ -90,14 +90,12 @@ check_required_vars() {
   local required_vars=(
     GITHUB_OWNER
     GITHUB_REPO
-    PROD_DOMAIN
     SSH_KEY_NAME
     SSH_ALIAS_OR_USER_AT_HOST
     PROD_HOST
     PROD_USER
     PROD_PORT
     PROD_PATH_TO_THEME
-    EXPECTED_PROD_HOST_FINGERPRINT
   )
 
   for key in "${required_vars[@]}"; do
@@ -220,7 +218,6 @@ else
 
   prompt_required GITHUB_OWNER "GitHub owner (user/org)"
   prompt_default GITHUB_REPO "GitHub repository name" "$default_repo"
-  prompt_required PROD_DOMAIN "Production domain (example.com)"
 
   if confirm_yes_no "Use existing SSH private key under ~/.ssh?"; then
     while true; do
@@ -239,20 +236,17 @@ else
   prompt_required PROD_USER "Production SSH user"
   prompt_default PROD_PORT "Production SSH port" "22"
   prompt_required PROD_PATH_TO_THEME "Production theme path"
-  prompt_required EXPECTED_PROD_HOST_FINGERPRINT "Expected production host key fingerprint (example: SHA256:...)"
 
   echo ""
   echo "Please confirm the values:"
   echo "GITHUB_OWNER=${GITHUB_OWNER}"
   echo "GITHUB_REPO=${GITHUB_REPO}"
-  echo "PROD_DOMAIN=${PROD_DOMAIN}"
   echo "SSH_KEY_NAME=${SSH_KEY_NAME}"
   echo "SSH_ALIAS_OR_USER_AT_HOST=${SSH_ALIAS_OR_USER_AT_HOST}"
   echo "PROD_HOST=${PROD_HOST}"
   echo "PROD_USER=${PROD_USER}"
   echo "PROD_PORT=${PROD_PORT}"
   echo "PROD_PATH_TO_THEME=${PROD_PATH_TO_THEME}"
-  echo "EXPECTED_PROD_HOST_FINGERPRINT=${EXPECTED_PROD_HOST_FINGERPRINT}"
 
   if ! confirm_yes_no "Save these values to ${ENV_FILE}?"; then
     echo "Canceled."
@@ -262,14 +256,12 @@ else
   cat > "$ENV_FILE" <<ENV
 GITHUB_OWNER=${GITHUB_OWNER}
 GITHUB_REPO=${GITHUB_REPO}
-PROD_DOMAIN=${PROD_DOMAIN}
 SSH_KEY_NAME=${SSH_KEY_NAME}
 SSH_ALIAS_OR_USER_AT_HOST=${SSH_ALIAS_OR_USER_AT_HOST}
 PROD_HOST=${PROD_HOST}
 PROD_USER=${PROD_USER}
 PROD_PORT=${PROD_PORT}
 PROD_PATH_TO_THEME=${PROD_PATH_TO_THEME}
-EXPECTED_PROD_HOST_FINGERPRINT=${EXPECTED_PROD_HOST_FINGERPRINT}
 ENV
 
   chmod 600 "$ENV_FILE"
@@ -362,8 +354,8 @@ if [ -f "$HOME/.ssh/${SSH_KEY_NAME}" ]; then
 else
   if confirm_block \
     "Generate a new SSH key pair used by GitHub Actions deployment." \
-    "ssh-keygen -t ed25519 -C \"github-actions@${PROD_DOMAIN}\" -f \"$HOME/.ssh/${SSH_KEY_NAME}\" -N \"\""; then
-    ssh-keygen -t ed25519 -C "github-actions@${PROD_DOMAIN}" -f "$HOME/.ssh/${SSH_KEY_NAME}" -N ""
+    "ssh-keygen -t ed25519 -C \"github-actions@${GITHUB_OWNER}-${GITHUB_REPO}\" -f \"$HOME/.ssh/${SSH_KEY_NAME}\" -N \"\""; then
+    ssh-keygen -t ed25519 -C "github-actions@${GITHUB_OWNER}-${GITHUB_REPO}" -f "$HOME/.ssh/${SSH_KEY_NAME}" -N ""
     print_step_result "Completed."
   fi
 fi
@@ -376,22 +368,9 @@ if confirm_block \
 fi
 
 if confirm_block \
-  "Collect the production host key and verify its fingerprint matches the expected value." \
-  "ssh-keyscan -p \"${PROD_PORT}\" -H \"${PROD_HOST}\" > ${KNOWN_HOSTS_FILE}
-ssh-keygen -lf ${KNOWN_HOSTS_FILE}"; then
-  ACTUAL_FINGERPRINTS=""
+  "Collect the production host key for GitHub Actions known_hosts." \
+  "ssh-keyscan -p \"${PROD_PORT}\" -H \"${PROD_HOST}\" > ${KNOWN_HOSTS_FILE}"; then
   ssh-keyscan -p "${PROD_PORT}" -H "${PROD_HOST}" > "${KNOWN_HOSTS_FILE}"
-  ssh-keygen -lf "${KNOWN_HOSTS_FILE}"
-  ACTUAL_FINGERPRINTS="$(ssh-keygen -lf "${KNOWN_HOSTS_FILE}" | awk '{print $2}')"
-  if ! printf '%s\n' "${ACTUAL_FINGERPRINTS}" | grep -Fx -- "${EXPECTED_PROD_HOST_FINGERPRINT}" >/dev/null 2>&1; then
-    echo "Fingerprint verification failed."
-    echo "Expected: ${EXPECTED_PROD_HOST_FINGERPRINT}"
-    echo "Actual:"
-    printf '%s\n' "${ACTUAL_FINGERPRINTS}"
-    echo "Stop and verify host key out-of-band before rerunning."
-    exit 1
-  fi
-  echo "Fingerprint verified: ${EXPECTED_PROD_HOST_FINGERPRINT}"
   print_step_result "Completed."
 fi
 
